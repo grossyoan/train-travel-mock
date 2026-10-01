@@ -1,0 +1,372 @@
+/**
+ * Contract test: the spec is the source of truth. Every response the mock produces for
+ * a documented operation must validate against the schema the spec declares for that
+ * operation, status code and media type.
+ */
+import "@hyperjump/json-schema/formats";
+import {
+  type OutputFormat,
+  registerSchema,
+  type SchemaObject,
+  setShouldValidateFormat,
+  validate,
+} from "@hyperjump/json-schema/openapi-3-2";
+import { beforeAll, describe, expect, it } from "vitest";
+import { parse } from "yaml";
+import specText from "../openapi.yaml?raw";
+import { OPERATIONS } from "../src/http/operations";
+import { BANK, BERLIN, type Booking, CARD, type Collection, call, freshToken, json, PARIS, type Trip } from "./helpers";
+
+/** A JSON value, structurally the type hyperjump validates. */
+type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
+interface Example {
+  $ref?: string;
+  dataValue?: Json;
+}
+interface MediaType {
+  schema?: unknown;
+  itemSchema?: unknown;
+  examples?: Record<string, Example>;
+}
+interface ResponseObject {
+  $ref?: string;
+  content?: Record<string, MediaType>;
+}
+interface OperationObject {
+  operationId: string;
+  responses: Record<string, ResponseObject>;
+}
+interface Spec {
+  paths: Record<string, Record<string, unknown>>;
+  components: {
+    schemas: Record<string, unknown>;
+    responses: Record<string, ResponseObject>;
+    examples?: Record<string, Example>;
+  };
+}
+
+const spec = parse(specText) as Spec;
+const BASE_URI = "https://contract.test";
+const DIALECT = "https://spec.openapis.org/oas/3.2/dialect";
+/** Report every failing keyword, not just a boolean. */
+const OUTPUT: OutputFormat = "BASIC";
+const HTTP_METHODS = ["get", "put", "post", "delete", "options", "head", "patch", "trace", "query"];
+
+/** Rewrites spec-internal refs so that standalone schemas resolve against the registered components. */
+function rewriteRefs<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value).replaceAll('"#/components/schemas/', `"${BASE_URI}/components#/$defs/`)) as T;
+}
+
+/**
+ * OpenAPI semantics: a writeOnly property listed in `required` is only required in requests.
+ * Plain JSON Schema validation does not know the direction, so response schemas drop it.
+ */
+function forResponses(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(forResponses);
+  if (value === null || typeof value !== "object") return value;
+  const schema = Object.fromEntries(Object.entries(value).map(([key, child]) => [key, forResponses(child)]));
+  const properties = schema.properties as Record<string, { writeOnly?: boolean }> | undefined;
+  if (Array.isArray(schema.required) && properties) {
+    schema.required = schema.required.filter((name: string) => properties[name]?.writeOnly !== true);
+  }
+  return schema;
+}
+
+function specOperations(): Map<string, { method: string; path: string; operation: OperationObject }> {
+  const operations = new Map<string, { method: string; path: string; operation: OperationObject }>();
+  for (const [path, item] of Object.entries(spec.paths)) {
+    const entries: [string, unknown][] = Object.entries(item).filter(([key]) => HTTP_METHODS.includes(key));
+    const additional = item.additionalOperations as Record<string, unknown> | undefined;
+    entries.push(...Object.entries(additional ?? {}));
+    for (const [method, operation] of entries) {
+      const op = operation as OperationObject;
+      operations.set(op.operationId, { method: method.toUpperCase(), path, operation: op });
+    }
+  }
+  return operations;
+}
+
+const operations = specOperations();
+
+function responseObject(operationId: string, status: number): ResponseObject {
+  const operation = operations.get(operationId)?.operation;
+  if (!operation) throw new Error(`Unknown operation ${operationId}`);
+  const response = operation.responses[String(status)];
+  if (!response) throw new Error(`${operationId} does not document status ${status}`);
+  if (response.$ref) {
+    const name = response.$ref.replace("#/components/responses/", "");
+    const resolved = spec.components.responses[name];
+    if (!resolved) throw new Error(`Unresolved ${response.$ref}`);
+    return resolved;
+  }
+  return response;
+}
+
+/** RFC 9457 lets problem details carry extension members: the mock adds `errors` to name each invalid field. */
+const PROBLEM_EXTENSIONS = new Set(["errors"]);
+
+/** The schema nodes that apply to an instance: `$ref` followed, `allOf`/`oneOf`/`anyOf` flattened. */
+function flatten(schema: unknown): Record<string, unknown>[] {
+  if (schema === null || typeof schema !== "object") return [];
+  const node = schema as Record<string, unknown>;
+  if (typeof node.$ref === "string") {
+    return flatten(spec.components.schemas[node.$ref.replace("#/components/schemas/", "")]);
+  }
+  const branches = ["allOf", "oneOf", "anyOf"].flatMap((key) => (Array.isArray(node[key]) ? node[key] : []));
+  return [node, ...branches.flatMap(flatten)];
+}
+
+/**
+ * Validation alone accepts any extra property, since the schemas leave objects open. A
+ * response must not add what the spec does not describe: lists every property path of
+ * `instance` (`data[].links.trip`) that no applicable schema declares.
+ */
+function undeclaredPaths(schemas: unknown[], instance: unknown, path = ""): string[] {
+  const nodes = schemas.flatMap(flatten);
+  if (Array.isArray(instance)) {
+    const items = nodes.flatMap((node) => (node.items ? [node.items] : []));
+    return instance.flatMap((item) => undeclaredPaths(items, item, `${path}[]`));
+  }
+  if (instance === null || typeof instance !== "object") return [];
+  const declared = new Map<string, unknown[]>();
+  for (const node of nodes) {
+    for (const [name, child] of Object.entries((node.properties ?? {}) as Record<string, unknown>)) {
+      declared.set(name, [...(declared.get(name) ?? []), child]);
+    }
+  }
+  // An object schema without any `properties` is free-form.
+  if (declared.size === 0) return [];
+  return Object.entries(instance).flatMap(([name, value]) => {
+    const at = path ? `${path}.${name}` : name;
+    const children = declared.get(name);
+    return children ? undeclaredPaths(children, value, at) : [at];
+  });
+}
+
+/** Property paths shown in the spec's examples for a response, in the format of `undeclaredPaths`. */
+function examplePaths(media: MediaType | undefined): Set<string> {
+  const paths = new Set<string>();
+  const walk = (value: unknown, path: string) => {
+    if (Array.isArray(value)) for (const item of value) walk(item, `${path}[]`);
+    else if (value !== null && typeof value === "object") {
+      for (const [name, child] of Object.entries(value)) {
+        const at = path ? `${path}.${name}` : name;
+        paths.add(at);
+        walk(child, at);
+      }
+    }
+  };
+  for (const example of Object.values(media?.examples ?? {})) {
+    const resolved = example.$ref
+      ? spec.components.examples?.[example.$ref.replace("#/components/examples/", "")]
+      : example;
+    walk(resolved?.dataValue, "");
+  }
+  return paths;
+}
+
+/** Fails on any property the spec neither declares in the schema nor shows in an example. */
+function expectNothingUndeclared(
+  label: string,
+  schema: unknown,
+  instance: unknown,
+  media?: MediaType,
+  problem = false,
+) {
+  const shown = examplePaths(media);
+  const extra = undeclaredPaths([schema], instance).filter(
+    (path) => !shown.has(path) && !(problem && PROBLEM_EXTENSIONS.has(path)),
+  );
+  expect(extra, `${label} returns properties the spec does not describe`).toEqual([]);
+}
+
+const registered = new Set<string>();
+
+async function expectConformant(operationId: string, response: Response) {
+  const contentType = (response.headers.get("Content-Type") ?? "").split(";")[0]?.trim() ?? "";
+  const media = responseObject(operationId, response.status).content?.[contentType];
+  expect(media, `${operationId} ${response.status} does not document ${contentType}`).toBeDefined();
+  const uri = `${BASE_URI}/${operationId}/${response.status}/${encodeURIComponent(contentType)}`;
+  if (!registered.has(uri)) {
+    registerSchema(rewriteRefs((media?.schema ?? media?.itemSchema) as SchemaObject), uri, DIALECT);
+    registered.add(uri);
+  }
+  const text = await response.text();
+  const instances =
+    contentType === "application/jsonl"
+      ? text
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : contentType === "text/event-stream"
+        ? text
+            .trim()
+            .split("\n\n")
+            .map((block) => {
+              const [event, data] = block.split("\n");
+              return { event: event?.replace("event: ", ""), data: data?.replace("data: ", "") };
+            })
+        : [JSON.parse(text)];
+  for (const instance of instances) {
+    const output = await validate(uri, instance, OUTPUT);
+    const label = `${operationId} ${response.status} ${JSON.stringify(instance)}`;
+    expect(output, label).toMatchObject({ valid: true });
+    expectNothingUndeclared(
+      label,
+      media?.schema ?? media?.itemSchema,
+      instance,
+      media,
+      contentType === "application/problem+json",
+    );
+    // `contentSchema` is only an annotation: check the JSON inside each SSE `data` explicitly.
+    if (contentType === "text/event-stream") {
+      const update = JSON.parse(String(instance.data));
+      const updateOutput = await validate(`${BASE_URI}/components#/$defs/TripUpdate`, update, OUTPUT);
+      expect(updateOutput, `SSE data ${instance.data}`).toMatchObject({ valid: true });
+      expectNothingUndeclared(`SSE data ${instance.data}`, { $ref: "#/components/schemas/TripUpdate" }, update);
+      expect(update.type).toBe(instance.event);
+    }
+  }
+}
+
+const covered = new Map<string, Set<number>>();
+async function check(operationId: string, response: Response, expectedStatus: number) {
+  expect(response.status, operationId).toBe(expectedStatus);
+  if (!covered.has(operationId)) covered.set(operationId, new Set());
+  covered.get(operationId)?.add(expectedStatus);
+  if (expectedStatus === 204) return;
+  await expectConformant(operationId, response);
+}
+
+describe("contract", () => {
+  beforeAll(() => {
+    // Formats (uuid, date-time, uri) are annotations by default in 2020-12: assert them.
+    setShouldValidateFormat(true);
+    registerSchema(
+      { $defs: forResponses(rewriteRefs(spec.components.schemas)) } as SchemaObject,
+      `${BASE_URI}/components`,
+      DIALECT,
+    );
+  });
+
+  it("documents the same status codes in code as in the spec", () => {
+    const fromSpec = Object.fromEntries(
+      [...operations].map(([id, { method, path, operation }]) => [
+        id,
+        { method, path, statuses: Object.keys(operation.responses).map(Number) },
+      ]),
+    );
+    const fromCode = Object.fromEntries(
+      Object.entries(OPERATIONS).map(([id, op]) => [id, { method: op.method, path: op.path, statuses: op.statuses }]),
+    );
+    expect(fromCode).toEqual(fromSpec);
+  });
+
+  it("produces conformant responses for every operation", async () => {
+    const token = freshToken();
+
+    await check("get-stations", await call("GET", "/stations?country=DE", { token }), 200);
+    await check("query-stations", await call("QUERY", "/stations", { token, body: { search: "Paris" } }), 200);
+
+    const tripsResponse = await call("GET", `/trips?origin=${BERLIN}&destination=${PARIS}&date=2026-11-02T08:00:00Z`, {
+      token,
+    });
+    const trips = await json<Collection<Trip>>(tripsResponse.clone());
+    await check("get-trips", tripsResponse, 200);
+    const trip = trips.data[0] as Trip;
+
+    const created = await call("POST", "/bookings", { token, body: { trip_id: trip.id, passenger_name: "Contract" } });
+    const booking = await json<Booking>(created.clone());
+    await check("create-booking", created, 201);
+    await check("get-booking", await call("GET", `/bookings/${booking.id}`, { token }), 200);
+    await check("get-bookings", await call("GET", "/bookings", { token }), 200);
+    await check(
+      "create-booking-payment",
+      await call("POST", `/bookings/${booking.id}/payment`, {
+        token,
+        body: { amount: 10, currency: "eur", source: CARD },
+      }),
+      200,
+    );
+
+    const second = await json<Booking>(
+      await call("POST", "/bookings", { token, body: { trip_id: trip.id, passenger_name: "Bank" } }),
+    );
+    await check(
+      "create-booking-payment",
+      await call("POST", `/bookings/${second.id}/payment`, {
+        token,
+        body: { amount: 10, currency: "gbp", source: BANK },
+      }),
+      200,
+    );
+
+    await check(
+      "subscribe-trip",
+      await call("SUBSCRIBE", `/trips/${trip.id}?interval=0`, { token, headers: { Accept: "application/jsonl" } }),
+      200,
+    );
+    await check(
+      "subscribe-trip",
+      await call("SUBSCRIBE", `/trips/${trip.id}?interval=0`, { token, headers: { Accept: "text/event-stream" } }),
+      200,
+    );
+    await check("delete-booking", await call("DELETE", `/bookings/${booking.id}`, { token }), 204);
+  });
+
+  it("produces conformant error responses", async () => {
+    const token = freshToken();
+    await check("create-booking", await call("POST", "/bookings", { token, body: {} }), 400);
+    await check(
+      "create-booking",
+      await call("POST", "/bookings", { token, body: { trip_id: crypto.randomUUID(), passenger_name: "Nobody" } }),
+      404,
+    );
+    await check("get-booking", await call("GET", `/bookings/${crypto.randomUUID()}`, { token }), 404);
+    await check("delete-booking", await call("DELETE", `/bookings/${crypto.randomUUID()}`, { token }), 404);
+    await check("get-trips", await call("GET", "/trips", { token }), 400);
+    await check("subscribe-trip", await call("SUBSCRIBE", `/trips/${crypto.randomUUID()}`, { token }), 404);
+
+    for (const [operationId, operation] of Object.entries(OPERATIONS)) {
+      for (const status of operation.statuses.filter((code) => code >= 400)) {
+        const path = operation.path.replace("{bookingId}", crypto.randomUUID()).replace("{id}", crypto.randomUUID());
+        await check(operationId, await call(operation.method, `${path}?__code=${status}`, { token }), status);
+      }
+    }
+  });
+
+  it("ships response examples that match their own schemas", async () => {
+    const examples = spec.components.examples ?? {};
+    let checked = 0;
+    for (const [operationId, { operation }] of operations) {
+      for (const status of Object.keys(operation.responses)) {
+        const content = responseObject(operationId, Number(status)).content ?? {};
+        for (const [mediaType, media] of Object.entries(content)) {
+          if (!mediaType.includes("json") || !media.schema) continue;
+          const uri = `${BASE_URI}/${operationId}/${status}/${encodeURIComponent(mediaType)}`;
+          if (!registered.has(uri)) {
+            registerSchema(rewriteRefs(media.schema as SchemaObject), uri, DIALECT);
+            registered.add(uri);
+          }
+          for (const [name, example] of Object.entries(media.examples ?? {})) {
+            const resolved = example.$ref ? examples[example.$ref.replace("#/components/examples/", "")] : example;
+            if (resolved?.dataValue === undefined) continue;
+            const output = await validate(uri, resolved.dataValue, OUTPUT);
+            expect(output, `${operationId} ${status} example "${name}"`).toMatchObject({ valid: true });
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(5);
+  });
+
+  it("covered every documented operation", () => {
+    for (const operationId of operations.keys()) {
+      expect(
+        [...(covered.get(operationId) ?? [])].some((status) => status < 300),
+        operationId,
+      ).toBe(true);
+    }
+  });
+});

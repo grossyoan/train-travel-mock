@@ -1,0 +1,33 @@
+{
+  "name": "train-travel-mock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Stateful mock server for the Train Travel API demo, running on Cloudflare Workers.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p test",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "types": "wrangler types",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.15",
+    "@cloudflare/vitest-plugin": "^1.3.4",
+    "@hyperjump/json-schema": "^1.17.8",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.145.0",
+    "yaml": "^2.9.1"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.11.2",
+    "hono": "^4.13.12"
+  }
+}

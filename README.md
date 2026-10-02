@@ -67,7 +67,7 @@ Then replace `YOUR-SUBDOMAIN` in the `servers` entry of `openapi.yaml` and publi
 
 ## Known limits
 
-- **API Explorer on Bump.sh**: its CORS proxy only forwards `GET, POST, PUT, PATCH, DELETE, OPTIONS`, so `QUERY /stations` and `SUBSCRIBE /trips/{id}` need curl or a direct call. The mock itself sends CORS headers for every method.
+- **API Explorer on Bump.sh**: keep the Explorer's CORS proxy disabled. The proxy only forwards `GET, POST, PUT, PATCH, DELETE, OPTIONS`, so `QUERY /stations` and `SUBSCRIBE /trips/{id}` fail through it. The mock sends its own CORS headers for every method, so browsers can call it directly.
 - **Webhooks**: the `newBooking` webhook is not sent, because the spec has no way to register a callback URL.
 - **Payment status codes**: `POST /bookings/{id}/payment` returns `404` for an unknown booking, although the spec does not list `404` for that operation.
 - **Rate limiting**: the `RateLimit` header is informational only; the mock never throttles. Cloudflare's free plan allows 100,000 requests a day.

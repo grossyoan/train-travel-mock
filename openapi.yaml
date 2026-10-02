@@ -291,7 +291,7 @@ paths:
             {
               "coordinates": "52.5200,13.4050",
               "search": "Milano Centrale",
-              "country": "DE"
+              "country": "IT"
             }
   /trips:
     get:
@@ -1161,7 +1161,7 @@ components:
           description: The fare to pay for this booking.
           readOnly: true
           examples:
-            - 89.9
+            - 140.9
         currency:
           type: string
           description: Three-letter [ISO currency code](https://www.iso.org/iso-4217-currency-codes.html) of the fare, in lowercase.

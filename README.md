@@ -23,6 +23,8 @@ npm run deploy          # prints https://train-travel-mock.<your-subdomain>.work
 npm run smoke -- https://train-travel-mock.<your-subdomain>.workers.dev
 ```
 
+`openapi.yaml` differs from the official Train Travel API: [`SPEC-CHANGES.md`](SPEC-CHANGES.md) explains every change and why.
+
 Then set the mock's URL in the `servers` entry of `openapi.yaml` and publish the spec. The examples in `openapi.yaml` were produced by this mock, and `npm test` checks that each one still matches its schema.
 
 ## How it behaves

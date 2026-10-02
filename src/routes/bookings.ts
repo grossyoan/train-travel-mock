@@ -1,4 +1,13 @@
 import { type Context, Hono } from "hono";
+import {
+  type Booking,
+  type BookingRecord,
+  bookingStatus,
+  hasDeparted,
+  holdUntil,
+  issueTicket,
+  presentBooking,
+} from "../domain/bookings";
 import { currencyForCountry, settle, validatePayment } from "../domain/payments";
 import { findStation } from "../domain/stations";
 import { summarize, validateFields } from "../domain/validation";
@@ -9,7 +18,7 @@ import { operation } from "../http/prefer";
 import { problem } from "../http/problem";
 import { readBody, send, sendProblem } from "../http/respond";
 import { spaceFor } from "../http/space";
-import { type Booking, MAX_BOOKINGS } from "../store/space";
+import { MAX_BOOKINGS } from "../store/space";
 
 export const bookings = new Hono<AppEnv>({ strict: false });
 
@@ -19,8 +28,19 @@ function bookingUrl(c: Context<AppEnv>, id: string): string {
   return `${baseUrl(c)}/bookings/${id}`;
 }
 
-function withLinks(c: Context<AppEnv>, booking: Booking) {
-  return { ...booking, links: { self: bookingUrl(c, booking.id) } };
+function present(c: Context<AppEnv>, record: BookingRecord, now = new Date()) {
+  const self = bookingUrl(c, record.booking.id);
+  return {
+    ...presentBooking(record, now),
+    links: { self, trip: `${baseUrl(c)}/trips/${record.booking.trip_id}`, payment: `${self}/payment` },
+  };
+}
+
+function departed(c: Context<AppEnv>, departureTime: string) {
+  return sendProblem(
+    c,
+    problem(409, `This train departed at ${departureTime}. Search trips with GET /trips for a later departure.`),
+  );
 }
 
 function bookingNotFound(c: Context<AppEnv>, id: string) {
@@ -38,7 +58,7 @@ bookings.get("/bookings", operation("get-bookings"), async (c) => {
   const { bookings: items, total } = await (await spaceFor(c)).listBookings(page.offset, page.limit);
   const body = collection(
     c,
-    items.map((booking) => withLinks(c, booking)),
+    items.map((record) => present(c, record)),
     page,
     total,
   );
@@ -68,6 +88,8 @@ bookings.post("/bookings", operation("create-booking"), async (c) => {
       ),
     );
   }
+  const now = new Date();
+  if (hasDeparted(trip.departure_time, now)) return departed(c, trip.departure_time);
   const booking: Booking = {
     id: crypto.randomUUID(),
     trip_id: trip.id,
@@ -88,13 +110,17 @@ bookings.post("/bookings", operation("create-booking"), async (c) => {
     );
   }
 
-  const { evicted } = await space.createBooking({
+  const record: BookingRecord = {
     booking,
     price: trip.price,
     currency: currencyForCountry(findStation(trip.origin)?.country_code),
-  });
+    created_at: now.toISOString(),
+    expires_at: holdUntil(now),
+    departure_time: trip.departure_time,
+  };
+  const { evicted } = await space.createBooking(record);
   const location = bookingUrl(c, booking.id);
-  return send(c, 201, withLinks(c, booking), {
+  return send(c, 201, present(c, record, now), {
     xml: { root: "booking" },
     headers: {
       ...NO_STORE,
@@ -110,7 +136,7 @@ bookings.get("/bookings/:bookingId", operation("get-booking"), async (c) => {
   const id = c.req.param("bookingId");
   const record = await (await spaceFor(c)).getBooking(id);
   if (!record) return bookingNotFound(c, id);
-  return send(c, 200, withLinks(c, record.booking), { xml: { root: "booking" }, headers: NO_STORE });
+  return send(c, 200, present(c, record), { xml: { root: "booking" }, headers: NO_STORE });
 });
 
 bookings.delete("/bookings/:bookingId", operation("delete-booking"), async (c) => {
@@ -124,7 +150,6 @@ bookings.post("/bookings/:bookingId/payment", operation("create-booking-payment"
   const id = c.req.param("bookingId");
   const space = await spaceFor(c);
   const record = await space.getBooking(id);
-  // 404 is not documented for this operation in the spec, but it is the honest answer.
   if (!record) return bookingNotFound(c, id);
 
   const body = await readBody(c);
@@ -135,11 +160,25 @@ bookings.post("/bookings/:bookingId/payment", operation("create-booking-payment"
   const respond = (payment: object) =>
     send(c, 200, { ...payment, links: { booking: bookingUrl(c, id) } }, { headers: NO_STORE });
 
-  // Idempotent: a booking that is already paid returns its payment instead of charging twice.
-  const existing = await space.getPayment(id);
-  if (existing?.status === "succeeded") return respond(existing);
+  const now = new Date();
+  const status = bookingStatus(record, now);
+  // Idempotent: a confirmed booking returns its payment instead of charging twice.
+  if (status === "confirmed") {
+    const existing = await space.getPayment(id);
+    if (existing) return respond(existing);
+  }
+  if (status === "expired") {
+    return sendProblem(
+      c,
+      problem(
+        409,
+        `The hold on booking ${id} expired at ${record.expires_at}. Create a new booking to pay for this trip.`,
+      ),
+    );
+  }
+  if (hasDeparted(record.departure_time, now)) return departed(c, record.departure_time);
 
   const payment = settle(crypto.randomUUID(), input, { amount: record.price, currency: record.currency });
-  await space.savePayment(id, payment);
+  await space.savePayment(record, payment, payment.status === "succeeded" ? issueTicket(id, now) : undefined);
   return respond(payment);
 });

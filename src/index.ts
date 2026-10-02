@@ -52,6 +52,13 @@ app.get("/", (c) =>
     endpoints: Object.values(OPERATIONS).map((operation) => `${operation.method} ${operation.path}`),
     authentication:
       "Optional. Any Authorization header value works and gives you a private data space; without one you share the public space. Data expires after 24 hours of inactivity.",
+    booking_journey: [
+      "GET /trips?origin=Paris&destination=Berlin — station names work, no date means from now",
+      "POST /bookings with a trip_id and passenger_name — held for 60 minutes (status pending_payment)",
+      "POST /bookings/{id}/payment with a card or bank account — confirms the booking",
+      "GET /bookings/{id} — status confirmed, with your ticket reference, coach and seat",
+      "SUBSCRIBE /trips/{id} — live platform, delay, departure and arrival updates",
+    ],
     errors_on_demand: "Send `Prefer: code=404` or add `?__code=404` to get any error status the spec documents.",
     test_cards: {
       "4242424242424242": "payment succeeds",

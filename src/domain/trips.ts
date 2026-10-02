@@ -1,6 +1,7 @@
 import { type Random, seededRandom } from "./random";
 import type { StationRecord } from "./station-data";
-import { distanceKm, findStation } from "./stations";
+import { distanceKm } from "./stations";
+import { addDays, atLocalTime, formatInZone, localDay } from "./time";
 import { uuidV5 } from "./uuid";
 
 export interface Trip {
@@ -16,8 +17,8 @@ export interface Trip {
 }
 
 export interface TripSearch {
-  origin: string;
-  destination: string;
+  origin: StationRecord;
+  destination: StationRecord;
   /** Earliest acceptable departure. */
   from: Date;
   bicycles: boolean;
@@ -49,23 +50,17 @@ const LAST_DEPARTURE_MINUTES = 22 * 60;
 const MINIMUM_RESULTS = 3;
 const MINUTE = 60_000;
 
-function operatorFor(
-  origin: StationRecord | undefined,
-  destination: StationRecord | undefined,
-  random: Random,
-): string {
-  const countries = [origin?.country_code, destination?.country_code];
+/** The national operator of either end; Eurostar across the Channel. */
+function operatorFor(origin: StationRecord, destination: StationRecord, random: Random): string {
+  const countries = [origin.country_code, destination.country_code];
   if (countries.includes("GB") && countries[0] !== countries[1]) return "Eurostar";
-  const operators = countries.flatMap((country) => (country && NATIONAL_OPERATORS[country]) || []);
+  // A country without a known national operator gets an international brand.
+  const operators = countries.flatMap((country) => NATIONAL_OPERATORS[country] ?? []);
   return random.pick(operators.length > 0 ? operators : FALLBACK_OPERATORS);
 }
 
-/** Distance by rail. Unknown stations get a plausible, stable distance derived from the pair. */
-function railDistanceKm(origin: string, destination: string): number {
-  const from = findStation(origin);
-  const to = findStation(destination);
-  if (from && to) return Math.max(30, distanceKm(from, to) * RAIL_DETOUR);
-  return seededRandom(`distance|${origin}|${destination}`).int(250, 950);
+function railDistanceKm(origin: StationRecord, destination: StationRecord): number {
+  return Math.max(30, distanceKm(origin, destination) * RAIL_DETOUR);
 }
 
 function roundToFiveMinutes(minutes: number): number {
@@ -78,42 +73,34 @@ function fare(distance: number, random: Random): number {
   return Math.max(9.9, Math.round(base) - 0.1);
 }
 
-function iso(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
-function startOfDayUtc(date: Date): Date {
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
 /**
- * The full timetable for one origin/destination pair on one UTC day. It is a pure
- * function of its inputs, so trip ids are stable: the same search always returns the
- * same trips, whoever asks.
+ * The full timetable for one origin/destination pair on one local day of the origin
+ * station ("2026-11-02"), from 05:00 to 22:00 station time. It is a pure function of its
+ * inputs, so trip ids are stable: the same search always returns the same trips, whoever
+ * asks. Times carry the offset of their station: departures the origin's, arrivals the
+ * destination's.
  */
-export async function timetable(origin: string, destination: string, day: Date): Promise<Trip[]> {
-  const midnight = startOfDayUtc(day);
-  const dayKey = iso(midnight).slice(0, 10);
-  const random = seededRandom(`timetable|${origin}|${destination}|${dayKey}`);
+export async function timetable(origin: StationRecord, destination: StationRecord, day: string): Promise<Trip[]> {
+  const random = seededRandom(`timetable|${origin.id}|${destination.id}|${day}`);
   const distance = railDistanceKm(origin, destination);
   const speed = distance > 400 ? 165 : 115;
   const baseDuration = (distance / speed) * 60 + 15;
-  const operator = operatorFor(findStation(origin), findStation(destination), random);
+  const operator = operatorFor(origin, destination, random);
 
   const trips: Trip[] = [];
   let minutes = FIRST_DEPARTURE_MINUTES + random.int(0, 40);
   while (minutes <= LAST_DEPARTURE_MINUTES) {
-    const departure = new Date(midnight.getTime() + minutes * MINUTE);
+    const departure = atLocalTime(day, minutes, origin.timezone);
     const duration = roundToFiveMinutes(baseDuration + random.int(-10, 25));
     const arrival = new Date(departure.getTime() + duration * MINUTE);
-    const departureTime = iso(departure);
     trips.push({
-      id: await uuidV5(`https://train-travel-mock/trips/${origin}|${destination}|${departureTime}`),
-      origin,
-      destination,
-      departure_time: departureTime,
-      arrival_time: iso(arrival),
-      operator: random.chance(0.8) ? operator : operatorFor(findStation(destination), findStation(origin), random),
+      // Named after the UTC instant, so the id does not depend on how the time is displayed.
+      id: await uuidV5(`https://train-travel-mock/trips/${origin.id}|${destination.id}|${departure.toISOString()}`),
+      origin: origin.id,
+      destination: destination.id,
+      departure_time: formatInZone(departure, origin.timezone),
+      arrival_time: formatInZone(arrival, destination.timezone),
+      operator: random.chance(0.8) ? operator : operatorFor(destination, origin, random),
       price: fare(distance, random),
       bicycles_allowed: random.chance(0.6),
       dogs_allowed: random.chance(0.5),
@@ -133,19 +120,9 @@ export async function searchTrips(search: TripSearch): Promise<Trip[]> {
     (!search.bicycles || trip.bicycles_allowed) &&
     (!search.dogs || trip.dogs_allowed);
 
-  const today = (await timetable(search.origin, search.destination, search.from)).filter(matches);
+  const day = localDay(search.from, search.origin.timezone);
+  const today = (await timetable(search.origin, search.destination, day)).filter(matches);
   if (today.length >= MINIMUM_RESULTS) return today;
-  const nextDay = new Date(startOfDayUtc(search.from).getTime() + 24 * 60 * MINUTE);
-  const tomorrow = (await timetable(search.origin, search.destination, nextDay)).filter(matches);
+  const tomorrow = (await timetable(search.origin, search.destination, addDays(day, 1))).filter(matches);
   return [...today, ...tomorrow];
-}
-
-/**
- * Accepts any date Date.parse understands. A bare day ("2026-11-02") means the whole
- * day, from midnight UTC.
- */
-export function parseTripDate(value: string): Date | undefined {
-  const trimmed = value.trim();
-  const timestamp = Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? `${trimmed}T00:00:00Z` : trimmed);
-  return Number.isNaN(timestamp) ? undefined : new Date(timestamp);
 }

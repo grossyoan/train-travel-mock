@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { type BookingRecord, bookingStatus, HOLD_MINUTES, holdUntil, issueTicket } from "../../src/domain/bookings";
 import { maskNumber, settle, validatePayment } from "../../src/domain/payments";
 import { seededRandom } from "../../src/domain/random";
+import type { StationRecord } from "../../src/domain/station-data";
 import { STATIONS } from "../../src/domain/station-data";
-import { parseCoordinates, searchStations } from "../../src/domain/stations";
-import { parseTripDate, timetable } from "../../src/domain/trips";
+import { findStation, parseCoordinates, resolveStation, searchStations } from "../../src/domain/stations";
+import { addDays, atLocalTime, formatInZone, localDay, parseDateInZone } from "../../src/domain/time";
+import { timetable } from "../../src/domain/trips";
 import { tripUpdates } from "../../src/domain/updates";
 import { isUuid } from "../../src/domain/uuid";
 import { validateFields } from "../../src/domain/validation";
@@ -44,34 +47,113 @@ describe("stations", () => {
   });
 });
 
+const PARIS_NORD = findStation("b2e783e1-c824-4d63-b37a-d8d698862f1d") as StationRecord;
+const BERLIN_HBF = findStation("efdbb9d1-02c2-4bc3-afb7-6788d8782b1e") as StationRecord;
+
 describe("trips", () => {
-  it("builds a stable, chronological timetable", async () => {
-    const day = new Date("2026-11-02T00:00:00Z");
-    const first = await timetable("a", "b", day);
-    expect(await timetable("a", "b", day)).toEqual(first);
+  it("builds a stable, chronological timetable in local time", async () => {
+    const first = await timetable(BERLIN_HBF, PARIS_NORD, "2026-11-02");
+    expect(await timetable(BERLIN_HBF, PARIS_NORD, "2026-11-02")).toEqual(first);
     expect(first.length).toBeGreaterThanOrEqual(8);
     const departures = first.map((trip) => Date.parse(trip.departure_time));
     expect(departures).toEqual(departures.toSorted((x, y) => x - y));
     expect(first.every((trip) => isUuid(trip.id) && trip.price > 0)).toBe(true);
-  });
-
-  it("treats a bare day as midnight UTC and rejects nonsense", () => {
-    expect(parseTripDate("2026-11-02")?.toISOString()).toBe("2026-11-02T00:00:00.000Z");
-    expect(parseTripDate("2026-11-02T09:30:00+01:00")?.toISOString()).toBe("2026-11-02T08:30:00.000Z");
-    expect(parseTripDate("soon")).toBeUndefined();
+    // Berlin is UTC+1 in November: the first train leaves after 05:00 local.
+    expect(first[0]?.departure_time).toMatch(/^2026-11-02T0[5-6]:\d{2}:00\+01:00$/);
   });
 
   it("tells a trip story that starts with the platform and ends on arrival", async () => {
-    const [trip] = await timetable("a", "b", new Date("2026-11-02T00:00:00Z"));
+    const [trip] = await timetable(BERLIN_HBF, PARIS_NORD, "2026-11-02");
     if (!trip) throw new Error("empty timetable");
     const updates = tripUpdates(trip);
     expect(updates[0]?.type).toBe("platform");
     expect(updates.at(-1)?.type).toBe("arrived");
     expect(updates.every((update) => update.trip_id === trip.id)).toBe(true);
+    // Berlin and Paris are both UTC+1 in November.
+    expect(updates.every((update) => update.occurred_at.endsWith("+01:00"))).toBe(true);
+  });
+});
+
+describe("time zones", () => {
+  it("reads naive dates in the given zone, across daylight saving time", () => {
+    expect(parseDateInZone("2026-01-15T09:00", "Europe/Paris")?.toISOString()).toBe("2026-01-15T08:00:00.000Z");
+    expect(parseDateInZone("2026-07-15T09:00", "Europe/Paris")?.toISOString()).toBe("2026-07-15T07:00:00.000Z");
+    expect(parseDateInZone("2026-07-15", "Europe/London")?.toISOString()).toBe("2026-07-14T23:00:00.000Z");
+    expect(parseDateInZone("2026-07-15T09:00:00Z", "Europe/Paris")?.toISOString()).toBe("2026-07-15T09:00:00.000Z");
+    expect(parseDateInZone("2026-07-15T09:00:00+02:00", "Europe/London")?.toISOString()).toBe(
+      "2026-07-15T07:00:00.000Z",
+    );
+    expect(parseDateInZone("soon", "Europe/Paris")).toBeUndefined();
+  });
+
+  it("formats an instant with the zone's offset", () => {
+    const instant = new Date("2026-07-15T07:00:00Z");
+    expect(formatInZone(instant, "Europe/Paris")).toBe("2026-07-15T09:00:00+02:00");
+    expect(formatInZone(instant, "Europe/London")).toBe("2026-07-15T08:00:00+01:00");
+    expect(formatInZone(new Date("2026-01-15T07:00:00Z"), "Europe/London")).toBe("2026-01-15T07:00:00+00:00");
+  });
+
+  it("gives the local day and builds local times", () => {
+    expect(localDay(new Date("2026-07-14T23:30:00Z"), "Europe/Paris")).toBe("2026-07-15");
+    expect(atLocalTime("2026-03-29", 5 * 60, "Europe/Paris").toISOString()).toBe("2026-03-29T03:00:00.000Z");
+    expect(addDays("2026-12-31", 1)).toBe("2027-01-01");
+  });
+});
+
+describe("station resolution", () => {
+  it("resolves ids, names, abbreviations and picks the main station of a city", () => {
+    expect(resolveStation(PARIS_NORD.id)?.name).toBe("Paris Gare du Nord");
+    expect(resolveStation("paris")?.name).toBe("Paris Gare du Nord");
+    expect(resolveStation("Berlin Hbf")?.id).toBe(BERLIN_HBF.id);
+    expect(resolveStation("  münchen  ")?.name).toBe("München Hauptbahnhof");
+    expect(resolveStation("London")?.name).toBe("London St Pancras International");
+    expect(resolveStation("Atlantis")).toBeUndefined();
+  });
+});
+
+describe("bookings", () => {
+  const record = (overrides: Partial<BookingRecord> = {}): BookingRecord => ({
+    booking: { id: "b", trip_id: "t", passenger_name: "P", has_bicycle: false, has_dog: false },
+    price: 10,
+    currency: "eur",
+    created_at: "2026-11-01T10:00:00Z",
+    expires_at: "2026-11-01T11:00:00Z",
+    departure_time: "2026-11-02T10:00:00+01:00",
+    ...overrides,
+  });
+
+  it("is pending, then expired after the hold, and confirmed once ticketed", () => {
+    expect(bookingStatus(record(), new Date("2026-11-01T10:59:00Z"))).toBe("pending_payment");
+    expect(bookingStatus(record(), new Date("2026-11-01T11:00:01Z"))).toBe("expired");
+    const ticket = issueTicket("b", new Date("2026-11-01T10:30:00Z"));
+    expect(bookingStatus(record({ ticket }), new Date("2026-11-05T00:00:00Z"))).toBe("confirmed");
+  });
+
+  it("holds a booking for an hour", () => {
+    expect(holdUntil(new Date("2026-11-01T10:00:00Z"))).toBe("2026-11-01T11:00:00Z");
+    expect(HOLD_MINUTES).toBe(60);
+  });
+
+  it("issues a stable, readable ticket", () => {
+    const now = new Date("2026-11-01T10:30:00Z");
+    const ticket = issueTicket("booking-1", now);
+    expect(issueTicket("booking-1", now)).toEqual(ticket);
+    expect(ticket.reference).toMatch(/^TT-[0-9A-HJKMNP-TV-Z]{6}$/);
+    expect(ticket.seat).toMatch(/^\d+[A-D]$/);
+    expect(ticket.issued_at).toBe("2026-11-01T10:30:00Z");
+    expect(issueTicket("booking-2", now).reference).not.toBe(ticket.reference);
   });
 });
 
 describe("payments", () => {
+  it("accepts a card without cvc but still checks one that is given", () => {
+    const card = { name: "A", number: "4242424242424242", exp_month: 1, exp_year: 2030, address_country: "fr" };
+    expect(validatePayment({ source: card }).errors).toEqual([]);
+    expect(validatePayment({ source: { ...card, cvc: "1" } }).errors).toEqual([
+      { pointer: "/source/cvc", detail: "must be at least 3 characters" },
+    ]);
+  });
+
   it("masks all but the last four characters", () => {
     expect(maskNumber("4242424242424242")).toBe("************4242");
     expect(maskNumber("00012345")).toBe("****2345");

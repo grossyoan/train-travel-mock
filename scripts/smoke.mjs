@@ -70,36 +70,53 @@ await step("QUERY /stations filters from the body", async () => {
   );
 });
 
-await step(`GET /trips Berlin → Paris on ${date}`, async () => {
-  const response = await call("GET", `/trips?origin=${BERLIN}&destination=${PARIS}&date=${date}`);
+await step("GET /trips?origin=Berlin&destination=Paris (names, no date) → next departures in local time", async () => {
+  const response = await call("GET", "/trips?origin=Berlin&destination=Paris");
   assert.equal(response.status, 200);
   const { data } = await response.json();
   assert.ok(data.length >= 3, `expected ≥ 3 trips, got ${data.length}`);
   assert.ok(data.every((item) => item.origin === BERLIN && item.destination === PARIS));
+  assert.match(data[0].departure_time, /[+-]\d{2}:\d{2}$/);
+});
+
+await step(`GET /trips by id on ${date}`, async () => {
+  const response = await call("GET", `/trips?origin=${BERLIN}&destination=${PARIS}&date=${date}T09:00`);
+  assert.equal(response.status, 200);
+  const { data } = await response.json();
   trip = data.find((item) => item.bicycles_allowed) ?? data[0];
 });
 
-await step("POST /bookings → 201 with Location", async () => {
+await step("POST /bookings → 201 pending_payment, with price, hold and links", async () => {
   const response = await call("POST", "/bookings", { body: { trip_id: trip.id, passenger_name: "Smoke Test" } });
   assert.equal(response.status, 201);
   booking = await response.json();
   assert.equal(response.headers.get("Location"), booking.links.self);
   assert.equal(booking.trip_id, trip.id);
+  assert.equal(booking.status, "pending_payment");
+  assert.equal(booking.price, trip.price);
+  assert.ok(Date.parse(booking.expires_at) > Date.now());
+  assert.equal(booking.links.payment, `${booking.links.self}/payment`);
 });
 
-await step("POST /bookings/{id}/payment → succeeded, number masked, no cvc", async () => {
-  const response = await call("POST", `/bookings/${booking.id}/payment`, { body: { source: CARD } });
-  assert.equal(response.status, 200);
-  const payment = await response.json();
-  assert.equal(payment.status, "succeeded");
-  assert.equal(payment.amount, trip.price);
-  assert.equal(payment.source.number, "************4242");
-  assert.equal(payment.source.cvc, undefined);
-});
+await step(
+  "POST /bookings/{id}/payment with a card and no cvc (as the API Explorer sends it) → succeeded",
+  async () => {
+    const { cvc: _omitted, ...card } = CARD;
+    const response = await call("POST", `/bookings/${booking.id}/payment`, { body: { source: card } });
+    assert.equal(response.status, 200);
+    const payment = await response.json();
+    assert.equal(payment.status, "succeeded");
+    assert.equal(payment.amount, trip.price);
+    assert.equal(payment.source.number, "************4242");
+    assert.equal(payment.source.cvc, undefined);
+  },
+);
 
-await step("GET /bookings/{id} returns the stored booking", async () => {
+await step("GET /bookings/{id} → confirmed, with a ticket", async () => {
   const response = await call("GET", `/bookings/${booking.id}`);
-  assert.deepEqual(await response.json(), booking);
+  const confirmed = await response.json();
+  assert.equal(confirmed.status, "confirmed");
+  assert.match(confirmed.ticket.reference, /^TT-[0-9A-HJKMNP-TV-Z]{6}$/);
 });
 
 await step("another token cannot see the booking", async () => {

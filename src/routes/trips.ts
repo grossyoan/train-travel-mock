@@ -1,7 +1,9 @@
 import { type Context, Hono } from "hono";
-import { parseTripDate, searchTrips, type Trip } from "../domain/trips";
+import { resolveStation } from "../domain/stations";
+import { parseDateInZone } from "../domain/time";
+import { searchTrips, type Trip } from "../domain/trips";
 import { tripUpdates } from "../domain/updates";
-import { summarize, validateFields } from "../domain/validation";
+import { type FieldError, summarize, validateFields } from "../domain/validation";
 import type { AppEnv } from "../http/app-env";
 import { baseUrl } from "../http/links";
 import { negotiate } from "../http/negotiate";
@@ -28,6 +30,13 @@ function withLinks(c: Context<AppEnv>, trip: Trip) {
   };
 }
 
+function stationNotFound(pointer: string, value: string): FieldError {
+  return {
+    pointer,
+    detail: `matches no station ("${value}"); find one with GET /stations?search=${encodeURIComponent(value)}`,
+  };
+}
+
 function tripNotFound(c: Context<AppEnv>, id: string) {
   return sendProblem(
     c,
@@ -44,21 +53,34 @@ trips.get("/trips", operation("get-trips"), async (c) => {
     {
       origin: { type: "string", required: true },
       destination: { type: "string", required: true },
-      date: { type: "string", required: true },
+      date: { type: "string" },
       bicycles: { type: "boolean" },
       dogs: { type: "boolean" },
     },
     "",
   );
-  const from = typeof values.date === "string" ? parseTripDate(values.date) : undefined;
-  if (typeof values.date === "string" && !from) {
-    errors.push({ pointer: "date", detail: 'must be an ISO 8601 date or date-time, e.g. "2026-11-02T09:00:00Z"' });
+  const resolve = (name: "origin" | "destination") => {
+    const value = values[name];
+    if (typeof value !== "string") return undefined;
+    const station = resolveStation(value);
+    if (!station) errors.push(stationNotFound(name, value));
+    return station;
+  };
+  const origin = resolve("origin");
+  const destination = resolve("destination");
+  // A date without offset is read in the origin station's timezone; no date means now.
+  const from =
+    typeof values.date !== "string" ? new Date() : origin ? parseDateInZone(values.date, origin.timezone) : undefined;
+  if (typeof values.date === "string" && origin && !from) {
+    errors.push({ pointer: "date", detail: 'must be an ISO 8601 date or date-time, e.g. "2026-11-02T09:00"' });
   }
-  if (errors.length > 0 || !from) return sendProblem(c, problem(400, summarize(errors), errors));
+  if (errors.length > 0 || !origin || !destination || !from) {
+    return sendProblem(c, problem(400, summarize(errors), errors));
+  }
 
   const found = await searchTrips({
-    origin: String(values.origin),
-    destination: String(values.destination),
+    origin,
+    destination,
     from,
     bicycles: values.bicycles === true,
     dogs: values.dogs === true,

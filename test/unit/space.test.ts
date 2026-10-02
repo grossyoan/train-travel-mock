@@ -7,6 +7,9 @@ const booking = (index: number) => ({
   booking: { id: `b${index}`, trip_id: "t", passenger_name: `P${index}`, has_bicycle: false, has_dog: false },
   price: 10,
   currency: "eur" as const,
+  created_at: "2026-11-01T10:00:00Z",
+  expires_at: "2026-11-01T11:00:00Z",
+  departure_time: "2026-11-02T10:00:00+01:00",
 });
 
 describe("Space", () => {
@@ -31,7 +34,7 @@ describe("Space", () => {
     expect(await stub.getBooking("b1")).toBeUndefined();
     const { bookings, total } = await stub.listBookings(0, 1);
     expect(total).toBe(MAX_BOOKINGS);
-    expect(bookings[0]?.id).toBe(`b${MAX_BOOKINGS + 1}`);
+    expect(bookings[0]?.booking.id).toBe(`b${MAX_BOOKINGS + 1}`);
   });
 
   it("reports whether a delete removed something", async () => {

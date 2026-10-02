@@ -7,17 +7,22 @@ import {
   CARD,
   type Collection,
   call,
+  FUTURE_DAY,
   freshToken,
   json,
+  LOCAL_DATE_TIME,
   PARIS,
   type Payment,
   type Problem,
   type Station,
+  TICKET_REFERENCE,
   type Trip,
   UUID,
 } from "./helpers";
 
-async function searchTrips(token: string, query = `origin=${BERLIN}&destination=${PARIS}&date=2026-11-02T08:00:00Z`) {
+const SEARCH = `origin=${BERLIN}&destination=${PARIS}&date=${FUTURE_DAY}T08:00:00Z`;
+
+async function searchTrips(token: string, query = SEARCH) {
   const response = await call("GET", `/trips?${query}`, { token });
   expect(response.status).toBe(200);
   return json<Collection<Trip>>(response);
@@ -41,7 +46,8 @@ describe("booking flow", () => {
       expect(trip.id).toMatch(UUID);
       expect(trip.origin).toBe(BERLIN);
       expect(trip.destination).toBe(PARIS);
-      expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(Date.parse("2026-11-02T08:00:00Z"));
+      expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(Date.parse(`${FUTURE_DAY}T08:00:00Z`));
+      expect(trip.departure_time).toMatch(LOCAL_DATE_TIME);
       expect(Date.parse(trip.arrival_time)).toBeGreaterThan(Date.parse(trip.departure_time));
       expect(trip.links.self).toBe(`${BASE}/trips/${trip.id}`);
       expect(trip.links.origin).toBe(`${BASE}/stations/${BERLIN}`);
@@ -58,7 +64,14 @@ describe("booking flow", () => {
       has_bicycle: false,
       has_dog: false,
     });
-    expect(booking.links.self).toBe(`${BASE}/bookings/${booking.id}`);
+    expect(booking).toMatchObject({ status: "pending_payment", price: trip.price, currency: "eur" });
+    expect(Date.parse(booking.expires_at) - Date.now()).toBeGreaterThan(55 * 60 * 1000);
+    expect(booking.ticket).toBeUndefined();
+    expect(booking.links).toEqual({
+      self: `${BASE}/bookings/${booking.id}`,
+      trip: `${BASE}/trips/${trip.id}`,
+      payment: `${BASE}/bookings/${booking.id}/payment`,
+    });
     expect(created.headers.get("Location")).toBe(booking.links.self);
 
     const paid = await call("POST", `/bookings/${booking.id}/payment`, {
@@ -77,7 +90,11 @@ describe("booking flow", () => {
 
     const read = await call("GET", `/bookings/${booking.id}`, { token });
     expect(read.status).toBe(200);
-    expect(await json<Booking>(read)).toEqual(booking);
+    const confirmed = await json<Booking>(read);
+    expect(confirmed).toEqual({ ...booking, status: "confirmed", ticket: confirmed.ticket });
+    expect(confirmed.ticket?.reference).toMatch(TICKET_REFERENCE);
+    expect(confirmed.ticket?.coach).toMatch(/^\d+$/);
+    expect(confirmed.ticket?.seat).toMatch(/^\d+[A-D]$/);
 
     const list = await json<Collection<Booking>>(await call("GET", "/bookings", { token }));
     expect(list.data.map((item) => item.id)).toContain(booking.id);
@@ -96,19 +113,56 @@ describe("booking flow", () => {
 
   it("accepts a plain date and lenient booleans", async () => {
     const token = freshToken();
-    const trips = await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=2026-11-02&bicycles=yes&dogs=1`);
+    const trips = await searchTrips(
+      token,
+      `origin=${BERLIN}&destination=${PARIS}&date=${FUTURE_DAY}&bicycles=yes&dogs=1`,
+    );
     expect(trips.data.length).toBeGreaterThan(0);
     for (const trip of trips.data) {
-      expect(trip.departure_time.startsWith("2026-11-0")).toBe(true);
+      expect(trip.departure_time >= FUTURE_DAY).toBe(true);
       expect(trip.bicycles_allowed).toBe(true);
       expect(trip.dogs_allowed).toBe(true);
     }
   });
 
-  it("still generates trips between unknown stations", async () => {
-    const trips = await searchTrips(freshToken(), "origin=my-home&destination=the-beach&date=2026-11-02T08:00:00Z");
+  it("finds trips by station name, from now when no date is given", async () => {
+    const before = Date.now();
+    const trips = await searchTrips(freshToken(), "origin=paris&destination=Berlin%20Hbf");
     expect(trips.data.length).toBeGreaterThanOrEqual(3);
-    expect(trips.data[0]?.origin).toBe("my-home");
+    for (const trip of trips.data) {
+      expect(trip.origin).toBe(PARIS);
+      expect(trip.destination).toBe(BERLIN);
+      expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(before - 60_000);
+    }
+  });
+
+  it("expresses times in each station's local time", async () => {
+    const trips = await searchTrips(freshToken(), `origin=London&destination=Paris&date=${FUTURE_DAY}`);
+    const trip = trips.data[0] as Trip;
+    expect(trip.departure_time).toMatch(LOCAL_DATE_TIME);
+    expect(trip.arrival_time).toMatch(LOCAL_DATE_TIME);
+    const offset = (value: string) => value.slice(-6);
+    // London is always one hour behind Paris.
+    expect(Number(offset(trip.arrival_time).slice(0, 3)) - Number(offset(trip.departure_time).slice(0, 3))).toBe(1);
+  });
+
+  it("reads a date without offset in the origin station's timezone", async () => {
+    const trips = await searchTrips(freshToken(), `origin=Paris&destination=Berlin&date=${FUTURE_DAY}T09:00`);
+    const first = trips.data[0] as Trip;
+    expect(first.departure_time.startsWith(FUTURE_DAY)).toBe(true);
+    expect(first.departure_time.slice(11, 16) >= "09:00").toBe(true);
+  });
+
+  it("confirms a card payment sent without cvc, as the API Explorer does", async () => {
+    const token = freshToken();
+    const trip = (await searchTrips(token)).data[0] as Trip;
+    const booking = await json<Booking>(await book(token, { trip_id: trip.id, passenger_name: "No CVC" }));
+    const { cvc: _omitted, ...withoutCvc } = CARD;
+    const paid = await call("POST", `/bookings/${booking.id}/payment`, { token, body: { source: withoutCvc } });
+    expect(paid.status).toBe(200);
+    expect((await json<Payment>(paid)).status).toBe("succeeded");
+    const read = await json<Booking>(await call("GET", `/bookings/${booking.id}`, { token }));
+    expect(read.status).toBe("confirmed");
   });
 
   it("marks the Stripe-style decline card as failed and accepts bank accounts", async () => {
@@ -124,6 +178,9 @@ describe("booking flow", () => {
     const failedPayment = await json<Payment>(failed);
     expect(failedPayment.status).toBe("failed");
     expect(failedPayment.source.number).toBe("************0002");
+    const stillPending = await json<Booking>(await call("GET", `/bookings/${declined.id}`, { token }));
+    expect(stillPending.status).toBe("pending_payment");
+    expect(stillPending.ticket).toBeUndefined();
 
     const viaBank = await json<Booking>(await book(token, { trip_id: trip.id, passenger_name: "Bank" }));
     const bank = await json<Payment>(
@@ -183,11 +240,28 @@ describe("explicit errors", () => {
     expect((await json<Problem>(response)).detail).toMatch(/JSON/);
   });
 
-  it("requires origin, destination and date on /trips", async () => {
+  it("requires origin and destination on /trips", async () => {
     const response = await call("GET", "/trips", { token: freshToken() });
     expect(response.status).toBe(400);
     const problem = await json<Problem>(response);
-    expect(problem.errors?.map((error) => error.pointer)).toEqual(["origin", "destination", "date"]);
+    expect(problem.errors?.map((error) => error.pointer)).toEqual(["origin", "destination"]);
+  });
+
+  it("names a station it cannot find", async () => {
+    const response = await call("GET", "/trips?origin=Atlantis&destination=Paris");
+    expect(response.status).toBe(400);
+    const problem = await json<Problem>(response);
+    expect(problem.errors?.[0]).toMatchObject({ pointer: "origin" });
+    expect(problem.detail).toContain("Atlantis");
+    expect(problem.detail).toContain("/stations");
+  });
+
+  it("returns 409 when booking a train that has already departed", async () => {
+    const token = freshToken();
+    const past = await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=2026-01-05T08:00:00Z`);
+    const response = await book(token, { trip_id: past.data[0]?.id, passenger_name: "Late" });
+    expect(response.status).toBe(409);
+    expect((await json<Problem>(response)).detail).toContain("departed");
   });
 
   it("rejects an unparseable date", async () => {
@@ -204,7 +278,7 @@ describe("explicit errors", () => {
 
   it("returns 409 when booking a bicycle on a trip that does not allow them", async () => {
     const token = freshToken();
-    const trips = await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=2026-11-02T00:00:00Z&limit=100`);
+    const trips = await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=${FUTURE_DAY}&limit=100`);
     const noBikes = trips.data.find((trip) => !trip.bicycles_allowed);
     expect(noBikes, "timetable should contain a trip without bicycles").toBeDefined();
     const response = await book(token, { trip_id: noBikes?.id, passenger_name: "Cyclist", has_bicycle: true });
@@ -222,13 +296,7 @@ describe("explicit errors", () => {
     });
     expect(response.status).toBe(400);
     const pointers = (await json<Problem>(response)).errors?.map((error) => error.pointer);
-    expect(pointers).toEqual([
-      "/source/number",
-      "/source/cvc",
-      "/source/exp_month",
-      "/source/exp_year",
-      "/source/address_country",
-    ]);
+    expect(pointers).toEqual(["/source/number", "/source/exp_month", "/source/exp_year", "/source/address_country"]);
   });
 
   it("rejects an unsupported currency", async () => {
@@ -294,9 +362,7 @@ describe("isolation", () => {
     expect((await call("GET", `/bookings/${booking.id}`, { token: bob })).status).toBe(404);
     expect((await call("GET", `/bookings/${booking.id}`)).status).toBe(404);
 
-    const publicTrips = await json<Collection<Trip>>(
-      await call("GET", `/trips?origin=${BERLIN}&destination=${PARIS}&date=2026-11-02T08:00:00Z`),
-    );
+    const publicTrips = await json<Collection<Trip>>(await call("GET", `/trips?${SEARCH}`));
     const anonymous = await call("POST", "/bookings", {
       body: { trip_id: publicTrips.data[0]?.id, passenger_name: "Anonymous" },
     });
@@ -357,7 +423,7 @@ describe("content negotiation", () => {
 
   it("accepts an XML booking body", async () => {
     const token = freshToken();
-    const trip = (await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=2026-11-02&dogs=true`))
+    const trip = (await searchTrips(token, `origin=${BERLIN}&destination=${PARIS}&date=${FUTURE_DAY}&dogs=true`))
       .data[0] as Trip;
     const response = await call("POST", "/bookings", {
       token,

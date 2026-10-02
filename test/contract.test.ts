@@ -17,9 +17,16 @@ import specText from "../openapi.yaml?raw";
 import { OPERATIONS } from "../src/http/operations";
 import { BANK, BERLIN, type Booking, CARD, type Collection, call, freshToken, json, PARIS, type Trip } from "./helpers";
 
+/** A JSON value, structurally the type hyperjump validates. */
+type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
+interface Example {
+  $ref?: string;
+  dataValue?: Json;
+}
 interface MediaType {
   schema?: unknown;
   itemSchema?: unknown;
+  examples?: Record<string, Example>;
 }
 interface ResponseObject {
   $ref?: string;
@@ -31,7 +38,11 @@ interface OperationObject {
 }
 interface Spec {
   paths: Record<string, Record<string, unknown>>;
-  components: { schemas: Record<string, unknown>; responses: Record<string, ResponseObject> };
+  components: {
+    schemas: Record<string, unknown>;
+    responses: Record<string, ResponseObject>;
+    examples?: Record<string, Example>;
+  };
 }
 
 const spec = parse(specText) as Spec;
@@ -235,6 +246,32 @@ describe("contract", () => {
         await check(operationId, await call(operation.method, `${path}?__code=${status}`, { token }), status);
       }
     }
+  });
+
+  it("ships response examples that match their own schemas", async () => {
+    const examples = spec.components.examples ?? {};
+    let checked = 0;
+    for (const [operationId, { operation }] of operations) {
+      for (const status of Object.keys(operation.responses)) {
+        const content = responseObject(operationId, Number(status)).content ?? {};
+        for (const [mediaType, media] of Object.entries(content)) {
+          if (!mediaType.includes("json") || !media.schema) continue;
+          const uri = `${BASE_URI}/${operationId}/${status}/${encodeURIComponent(mediaType)}`;
+          if (!registered.has(uri)) {
+            registerSchema(rewriteRefs(media.schema as SchemaObject), uri, DIALECT);
+            registered.add(uri);
+          }
+          for (const [name, example] of Object.entries(media.examples ?? {})) {
+            const resolved = example.$ref ? examples[example.$ref.replace("#/components/examples/", "")] : example;
+            if (resolved?.dataValue === undefined) continue;
+            const output = await validate(uri, resolved.dataValue, OUTPUT);
+            expect(output, `${operationId} ${status} example "${name}"`).toMatchObject({ valid: true });
+            checked++;
+          }
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(5);
   });
 
   it("covered every documented operation", () => {

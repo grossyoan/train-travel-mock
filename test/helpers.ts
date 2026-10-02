@@ -4,6 +4,11 @@ export const BASE = "https://mock.test";
 export const BERLIN = "efdbb9d1-02c2-4bc3-afb7-6788d8782b1e";
 export const PARIS = "b2e783e1-c824-4d63-b37a-d8d698862f1d";
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A date-time with an explicit UTC offset, as trips are expressed in station local time. */
+export const LOCAL_DATE_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/;
+export const TICKET_REFERENCE = /^TT-[0-9A-HJKMNP-TV-Z]{6}$/;
+/** Always in the future, so trips stay bookable whenever the suite runs. */
+export const FUTURE_DAY = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
 export interface CallOptions {
   token?: string;
@@ -43,13 +48,25 @@ export interface Trip {
   links: { self: string; origin: string; destination: string };
 }
 
+export interface Ticket {
+  reference: string;
+  coach: string;
+  seat: string;
+  issued_at: string;
+}
+
 export interface Booking {
   id: string;
   trip_id: string;
   passenger_name: string;
   has_bicycle: boolean;
   has_dog: boolean;
-  links: { self: string };
+  status: "pending_payment" | "confirmed" | "expired";
+  price: number;
+  currency: string;
+  expires_at: string;
+  ticket?: Ticket;
+  links: { self: string; trip: string; payment: string };
 }
 
 export interface Payment {

@@ -59,19 +59,44 @@ export function distanceKm(from: Coordinates, to: Coordinates): number {
   return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+/** Common rail abbreviations, so "Berlin Hbf" finds "Berlin Hauptbahnhof" and "Zürich HB". */
+const ALIASES: Readonly<Record<string, readonly string[]>> = {
+  hbf: ["hauptbahnhof", "hb"],
+  hauptbahnhof: ["hbf", "hb"],
+  centrale: ["central", "centraal"],
+  central: ["centrale", "centraal"],
+};
+
+/** Every word of the search must appear in the station name or address (accent and case insensitive). */
+function matchesSearch(station: StationRecord, search: string): boolean {
+  const haystack = fold(`${station.name} ${station.address}`);
+  return fold(search)
+    .split(/\s+/)
+    .filter((word) => word !== "")
+    .every((word) => [word, ...(ALIASES[word] ?? [])].some((candidate) => haystack.includes(candidate)));
+}
+
 /**
  * Filters the catalogue. `search` matches name or address; `country` is case-insensitive;
  * `coordinates` sorts by proximity (closest first) instead of filtering.
  */
 export function searchStations(filters: StationFilters): StationRecord[] {
-  const search = filters.search ? fold(filters.search.trim()) : "";
+  const search = filters.search?.trim() ?? "";
   const country = filters.country?.trim().toUpperCase();
   const matches = STATIONS.filter(
-    (station) =>
-      (!search || fold(station.name).includes(search) || fold(station.address).includes(search)) &&
-      (!country || station.country_code === country),
+    (station) => (!search || matchesSearch(station, search)) && (!country || station.country_code === country),
   );
   const origin = filters.coordinates;
   if (!origin) return matches;
   return matches.toSorted((a, b) => distanceKm(origin, a) - distanceKm(origin, b));
+}
+
+/**
+ * A station from its id or its name. Names resolve to the first match in catalogue
+ * order, which lists each city's main station first ("Paris" is Gare du Nord).
+ */
+export function resolveStation(value: string): StationRecord | undefined {
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  return findStation(trimmed) ?? searchStations({ search: trimmed })[0];
 }

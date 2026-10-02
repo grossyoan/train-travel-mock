@@ -19,7 +19,11 @@ export const OPERATIONS = {
   "create-booking": { method: "POST", path: "/bookings", statuses: [201, 400, 401, 404, 409, 429, 500] },
   "get-booking": { method: "GET", path: "/bookings/{bookingId}", statuses: [200, 400, 401, 403, 404, 429, 500] },
   "delete-booking": { method: "DELETE", path: "/bookings/{bookingId}", statuses: [204, 400, 401, 403, 404, 429, 500] },
-  "create-booking-payment": { method: "POST", path: "/bookings/{bookingId}/payment", statuses: READ },
+  "create-booking-payment": {
+    method: "POST",
+    path: "/bookings/{bookingId}/payment",
+    statuses: [200, 400, 401, 403, 404, 409, 429, 500],
+  },
 } as const satisfies Record<string, Operation>;
 
 export type OperationId = keyof typeof OPERATIONS;

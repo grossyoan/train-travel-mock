@@ -63,7 +63,10 @@ export interface PaymentInput {
 const CARD_RULES: Rules = {
   name: { type: "string", required: true },
   number: { type: "string", required: true },
-  cvc: { type: "string", required: true, minLength: 3, maxLength: 4 },
+  // Required by the spec, but optional here on purpose: the Bump.sh API Explorer hides
+  // writeOnly fields from request forms, so a card paid from the Explorer has no cvc.
+  // A cvc that is sent is still validated.
+  cvc: { type: "string", minLength: 3, maxLength: 4 },
   exp_month: { type: "integer", required: true },
   exp_year: { type: "integer", required: true },
   address_line1: { type: "string" },

@@ -71,6 +71,8 @@ describe("booking flow", () => {
     expect(booking.id).toMatch(UUID);
     expect(booking).toMatchObject({
       trip_id: trip.id,
+      origin_name: "Berlin Hauptbahnhof",
+      destination_name: "Paris Gare du Nord",
       passenger_name: "Ada Lovelace",
       has_bicycle: false,
       has_dog: false,
@@ -459,6 +461,17 @@ describe("content negotiation", () => {
     });
     expect(response.status).toBe(201);
     expect(await json<Booking>(response)).toMatchObject({ passenger_name: "Xavier", has_dog: true });
+  });
+
+  it("serves bookings with station names as XML", async () => {
+    const token = freshToken();
+    const trip = (await searchTrips(token)).data[0] as Trip;
+    await book(token, { trip_id: trip.id, passenger_name: "Xavier" });
+    const response = await call("GET", "/bookings", { token, headers: { Accept: "application/xml" } });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("<origin_name>Berlin Hauptbahnhof</origin_name>");
+    expect(body).toContain("<destination_name>Paris Gare du Nord</destination_name>");
   });
 
   it("serves problem+xml errors to XML clients", async () => {

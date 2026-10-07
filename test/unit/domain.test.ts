@@ -112,6 +112,8 @@ describe("station resolution", () => {
 describe("bookings", () => {
   const record = (overrides: Partial<BookingRecord> = {}): BookingRecord => ({
     booking: { id: "b", trip_id: "t", passenger_name: "P", has_bicycle: false, has_dog: false },
+    origin: "o",
+    destination: "d",
     price: 10,
     currency: "eur",
     expires_at: "2026-11-01T11:00:00Z",

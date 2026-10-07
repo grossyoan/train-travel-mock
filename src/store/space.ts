@@ -22,8 +22,8 @@ export class Space extends DurableObject<Env> {
   private createSchema(): void {
     this.ctx.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS trips (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS bookings_v2 (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS payments_v2 (booking_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS bookings_v3 (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, data TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS payments_v3 (booking_id TEXT PRIMARY KEY, data TEXT NOT NULL);
     `);
   }
 
@@ -64,14 +64,14 @@ export class Space extends DurableObject<Env> {
     await this.touch();
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      sql.exec("INSERT INTO bookings_v2 (id, data) VALUES (?, ?)", record.booking.id, JSON.stringify(record));
+      sql.exec("INSERT INTO bookings_v3 (id, data) VALUES (?, ?)", record.booking.id, JSON.stringify(record));
       const evicted = sql
         .exec<{ id: string }>(
-          "DELETE FROM bookings_v2 WHERE seq IN (SELECT seq FROM bookings_v2 ORDER BY seq DESC LIMIT -1 OFFSET ?) RETURNING id",
+          "DELETE FROM bookings_v3 WHERE seq IN (SELECT seq FROM bookings_v3 ORDER BY seq DESC LIMIT -1 OFFSET ?) RETURNING id",
           MAX_BOOKINGS,
         )
         .toArray();
-      for (const { id } of evicted) sql.exec("DELETE FROM payments_v2 WHERE booking_id = ?", id);
+      for (const { id } of evicted) sql.exec("DELETE FROM payments_v3 WHERE booking_id = ?", id);
       return { evicted: evicted.length > 0 };
     });
   }
@@ -79,7 +79,7 @@ export class Space extends DurableObject<Env> {
   async getBooking(id: string): Promise<BookingRecord | undefined> {
     await this.touch();
     const row = this.ctx.storage.sql
-      .exec<{ data: string }>("SELECT data FROM bookings_v2 WHERE id = ?", id)
+      .exec<{ data: string }>("SELECT data FROM bookings_v3 WHERE id = ?", id)
       .toArray()[0];
     return row ? (JSON.parse(row.data) as BookingRecord) : undefined;
   }
@@ -88,9 +88,9 @@ export class Space extends DurableObject<Env> {
   async listBookings(offset: number, limit: number): Promise<{ bookings: BookingRecord[]; total: number }> {
     await this.touch();
     const sql = this.ctx.storage.sql;
-    const total = sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM bookings_v2").one().total;
+    const total = sql.exec<{ total: number }>("SELECT COUNT(*) AS total FROM bookings_v3").one().total;
     const rows = sql
-      .exec<{ data: string }>("SELECT data FROM bookings_v2 ORDER BY seq DESC LIMIT ? OFFSET ?", limit, offset)
+      .exec<{ data: string }>("SELECT data FROM bookings_v3 ORDER BY seq DESC LIMIT ? OFFSET ?", limit, offset)
       .toArray();
     return { bookings: rows.map((row) => JSON.parse(row.data) as BookingRecord), total };
   }
@@ -99,15 +99,15 @@ export class Space extends DurableObject<Env> {
     await this.touch();
     const sql = this.ctx.storage.sql;
     return this.ctx.storage.transactionSync(() => {
-      sql.exec("DELETE FROM payments_v2 WHERE booking_id = ?", id);
-      return sql.exec("DELETE FROM bookings_v2 WHERE id = ?", id).rowsWritten > 0;
+      sql.exec("DELETE FROM payments_v3 WHERE booking_id = ?", id);
+      return sql.exec("DELETE FROM bookings_v3 WHERE id = ?", id).rowsWritten > 0;
     });
   }
 
   async getPayment(bookingId: string): Promise<Payment | undefined> {
     await this.touch();
     const row = this.ctx.storage.sql
-      .exec<{ data: string }>("SELECT data FROM payments_v2 WHERE booking_id = ?", bookingId)
+      .exec<{ data: string }>("SELECT data FROM payments_v3 WHERE booking_id = ?", bookingId)
       .toArray()[0];
     return row ? (JSON.parse(row.data) as Payment) : undefined;
   }
@@ -118,9 +118,9 @@ export class Space extends DurableObject<Env> {
     const sql = this.ctx.storage.sql;
     const id = record.booking.id;
     this.ctx.storage.transactionSync(() => {
-      sql.exec("INSERT OR REPLACE INTO payments_v2 (booking_id, data) VALUES (?, ?)", id, JSON.stringify(payment));
+      sql.exec("INSERT OR REPLACE INTO payments_v3 (booking_id, data) VALUES (?, ?)", id, JSON.stringify(payment));
       if (paidAt) {
-        sql.exec("UPDATE bookings_v2 SET data = ? WHERE id = ?", JSON.stringify({ ...record, paid_at: paidAt }), id);
+        sql.exec("UPDATE bookings_v3 SET data = ? WHERE id = ?", JSON.stringify({ ...record, paid_at: paidAt }), id);
       }
     });
   }

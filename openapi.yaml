@@ -839,6 +839,8 @@ webhooks:
             example:
               id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
               trip_id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+              origin_name: Berlin Hauptbahnhof
+              destination_name: Paris Gare du Nord
               passenger_name: John Doe
               has_bicycle: true
               has_dog: true
@@ -1138,6 +1140,20 @@ components:
           description: Identifier of the booked trip
           examples:
             - ea399ba1-6d95-433f-92d1-83f67b775594
+        origin_name:
+          type: string
+          description: The name of the starting station of the booked trip
+          readOnly: true
+          examples:
+            - Berlin Hauptbahnhof
+            - Paris Gare du Nord
+        destination_name:
+          type: string
+          description: The name of the destination station of the booked trip
+          readOnly: true
+          examples:
+            - Paris Gare du Nord
+            - Berlin Hauptbahnhof
         passenger_name:
           type: string
           description: Name of the passenger
@@ -1654,6 +1670,8 @@ components:
         data:
           - id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
             trip_id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+            origin_name: Berlin Hauptbahnhof
+            destination_name: Paris Gare du Nord
             passenger_name: John Doe
             has_bicycle: true
             has_dog: true
@@ -1663,6 +1681,8 @@ components:
             expires_at: '2026-10-02T11:04:31Z'
           - id: b2e783e1-c824-4d63-b37a-d8d698862f1d
             trip_id: b2e783e1-c824-4d63-b37a-d8d698862f1d
+            origin_name: Paris Gare du Nord
+            destination_name: Berlin Hauptbahnhof
             passenger_name: Jane Smith
             has_bicycle: false
             has_dog: false
@@ -1678,6 +1698,8 @@ components:
       dataValue:
         id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
         trip_id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+        origin_name: Berlin Hauptbahnhof
+        destination_name: Paris Gare du Nord
         passenger_name: John Doe
         has_bicycle: true
         has_dog: true
@@ -1692,6 +1714,8 @@ components:
       dataValue:
         id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
         trip_id: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+        origin_name: Berlin Hauptbahnhof
+        destination_name: Paris Gare du Nord
         passenger_name: John Doe
         has_bicycle: true
         has_dog: true

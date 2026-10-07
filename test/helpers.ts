@@ -52,6 +52,8 @@ export interface Trip {
 export interface Booking {
   id: string;
   trip_id: string;
+  origin_name: string;
+  destination_name: string;
   passenger_name: string;
   has_bicycle: boolean;
   has_dog: boolean;

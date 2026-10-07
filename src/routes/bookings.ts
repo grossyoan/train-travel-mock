@@ -110,6 +110,8 @@ bookings.post("/bookings", operation("create-booking"), async (c) => {
 
   const record: BookingRecord = {
     booking,
+    origin: trip.origin,
+    destination: trip.destination,
     price: trip.price,
     currency: currencyForCountry(findStation(trip.origin)?.country_code),
     expires_at: holdUntil(now),

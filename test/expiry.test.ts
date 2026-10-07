@@ -32,7 +32,7 @@ describe("booking hold", () => {
 
     await runInDurableObject(await spaceOf(token), (_instance: Space, state) => {
       state.storage.sql.exec(
-        "UPDATE bookings_v2 SET data = json_set(data, '$.expires_at', ?) WHERE id = ?",
+        "UPDATE bookings_v3 SET data = json_set(data, '$.expires_at', ?) WHERE id = ?",
         "2020-01-01T00:00:00Z",
         booking.id,
       );

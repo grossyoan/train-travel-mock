@@ -1,4 +1,5 @@
 import type { Currency } from "./payments";
+import { stationName } from "./stations";
 import { formatUtc } from "./time";
 
 /** How long an unpaid booking holds its trip. Real operators hold for 15–20 minutes; an hour leaves time to explore. */
@@ -16,6 +17,9 @@ export interface Booking {
 /** A stored booking with what it needs to run its lifecycle. */
 export interface BookingRecord {
   booking: Booking;
+  /** Station ids of the booked trip: trips can be evicted from a space, bookings outlive them. */
+  origin: string;
+  destination: string;
   price: number;
   currency: Currency;
   expires_at: string;
@@ -41,10 +45,15 @@ export function hasDeparted(departureTime: string, now: Date): boolean {
   return Date.parse(departureTime) <= now.getTime();
 }
 
-/** The booking as the API shows it: what was sent, plus its status, fare and hold. */
+/** The booking as the API shows it: what was sent, plus its stations, status, fare and hold. Keys follow the spec's order. */
 export function presentBooking(record: BookingRecord, now: Date) {
+  const { id, trip_id, ...rest } = record.booking;
   return {
-    ...record.booking,
+    id,
+    trip_id,
+    origin_name: stationName(record.origin),
+    destination_name: stationName(record.destination),
+    ...rest,
     status: bookingStatus(record, now),
     price: record.price,
     currency: record.currency,

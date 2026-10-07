@@ -5,6 +5,8 @@ import { MAX_BOOKINGS, type Space } from "../../src/store/space";
 
 const booking = (index: number) => ({
   booking: { id: `b${index}`, trip_id: "t", passenger_name: `P${index}`, has_bicycle: false, has_dog: false },
+  origin: "o",
+  destination: "d",
   price: 10,
   currency: "eur" as const,
   expires_at: "2026-11-01T11:00:00Z",

@@ -1,5 +1,5 @@
 import { type Context, Hono } from "hono";
-import { resolveStation } from "../domain/stations";
+import { resolveStation, stationName } from "../domain/stations";
 import { parseDateInZone } from "../domain/time";
 import { searchTrips, type Trip } from "../domain/trips";
 import { tripUpdates } from "../domain/updates";
@@ -18,10 +18,20 @@ export const trips = new Hono<AppEnv>({ strict: false });
 const DEFAULT_INTERVAL_SECONDS = 2;
 const MAX_INTERVAL_SECONDS = 10;
 
+/**
+ * Station names are derived here rather than stored, so trips saved before names existed
+ * still get them. Keys follow the spec's order.
+ */
 function withLinks(c: Context<AppEnv>, trip: Trip) {
   const base = baseUrl(c);
+  const { id, origin, destination, ...rest } = trip;
   return {
-    ...trip,
+    id,
+    origin,
+    destination,
+    origin_name: stationName(origin),
+    destination_name: stationName(destination),
+    ...rest,
     links: {
       self: `${base}/trips/${trip.id}`,
       origin: `${base}/stations/${trip.origin}`,

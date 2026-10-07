@@ -38,6 +38,8 @@ export interface Trip {
   id: string;
   origin: string;
   destination: string;
+  origin_name: string;
+  destination_name: string;
   departure_time: string;
   arrival_time: string;
   operator: string;

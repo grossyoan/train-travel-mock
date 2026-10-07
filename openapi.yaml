@@ -1021,16 +1021,28 @@ components:
             - ea399ba1-6d95-433f-92d1-83f67b775594
         origin:
           type: string
-          description: The starting station of the trip
+          description: The id of starting station of the trip
           examples:
             - efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
             - b2e783e1-c824-4d63-b37a-d8d698862f1d
         destination:
           type: string
-          description: The destination station of the trip
+          description: The id of destination station of the trip
           examples:
             - b2e783e1-c824-4d63-b37a-d8d698862f1d
             - efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+        origin_name:
+          type: string
+          description: The name of starting station of the trip
+          examples:
+            - Berlin Hauptbahnhof
+            - Paris Gare du Nord
+        destination_name:
+          type: string
+          description: The name of destination station of the trip
+          examples:
+            - Paris Gare du Nord
+            - Berlin Hauptbahnhof
         departure_time:
           type: string
           format: date-time
@@ -1606,6 +1618,8 @@ components:
           - id: ea399ba1-6d95-433f-92d1-83f67b775594
             origin: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
             destination: b2e783e1-c824-4d63-b37a-d8d698862f1d
+            origin_name: Berlin Hauptbahnhof
+            destination_name: Paris Gare du Nord
             departure_time: '2024-02-01T10:00:00Z'
             arrival_time: '2024-02-01T16:00:00Z'
             price: 50
@@ -1619,6 +1633,8 @@ components:
           - id: 4d67459c-af07-40bb-bb12-178dbb88e09f
             origin: b2e783e1-c824-4d63-b37a-d8d698862f1d
             destination: efdbb9d1-02c2-4bc3-afb7-6788d8782b1e
+            origin_name: Paris Gare du Nord
+            destination_name: Berlin Hauptbahnhof
             departure_time: '2024-02-01T12:00:00Z'
             arrival_time: '2024-02-01T18:00:00Z'
             price: 50

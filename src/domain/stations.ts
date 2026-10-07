@@ -26,6 +26,13 @@ export function findStation(id: string): StationRecord | undefined {
   return byId.get(id);
 }
 
+/** The name of a catalogue station. Trips only reference catalogue stations, so a miss is a bug. */
+export function stationName(id: string): string {
+  const station = byId.get(id);
+  if (!station) throw new Error(`Unknown station ${id}`);
+  return station.name;
+}
+
 export function toStation({ id, name, address, country_code, timezone }: StationRecord): Station {
   return { id, name, address, country_code, timezone };
 }

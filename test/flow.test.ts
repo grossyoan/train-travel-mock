@@ -54,6 +54,8 @@ describe("booking flow", () => {
       expect(trip.id).toMatch(UUID);
       expect(trip.origin).toBe(BERLIN);
       expect(trip.destination).toBe(PARIS);
+      expect(trip.origin_name).toBe("Berlin Hauptbahnhof");
+      expect(trip.destination_name).toBe("Paris Gare du Nord");
       expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(Date.parse(`${FUTURE_DAY}T08:00:00Z`));
       expect(trip.departure_time).toMatch(UTC_DATE_TIME);
       expect(trip.arrival_time).toMatch(UTC_DATE_TIME);
@@ -136,8 +138,22 @@ describe("booking flow", () => {
     for (const trip of trips.data) {
       expect(trip.origin).toBe(PARIS);
       expect(trip.destination).toBe(BERLIN);
+      // The resolved station's full name, not the query ("Berlin Hbf").
+      expect(trip.origin_name).toBe("Paris Gare du Nord");
+      expect(trip.destination_name).toBe("Berlin Hauptbahnhof");
       expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(before - 60_000);
     }
+  });
+
+  it("names the stations of a trip followed through links.self", async () => {
+    const token = freshToken();
+    const trip = (await searchTrips(token)).data[0] as Trip;
+    const response = await call("GET", `/trips/${trip.id}`, { token });
+    expect(response.status).toBe(200);
+    expect(await json<Trip>(response)).toMatchObject({
+      origin_name: "Berlin Hauptbahnhof",
+      destination_name: "Paris Gare du Nord",
+    });
   });
 
   it("expresses times in UTC, as the spec's examples do", async () => {
@@ -422,6 +438,14 @@ describe("content negotiation", () => {
     expect(response.headers.get("Content-Type")).toContain("application/xml");
     const body = await response.text();
     expect(body).toMatch(/^<\?xml version="1.0" encoding="UTF-8"\?>\s*<data>\s*<stations>\s*<station>/);
+  });
+
+  it("serves trips with station names as XML", async () => {
+    const response = await call("GET", `/trips?${SEARCH}&limit=1`, { headers: { Accept: "application/xml" } });
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain("<origin_name>Berlin Hauptbahnhof</origin_name>");
+    expect(body).toContain("<destination_name>Paris Gare du Nord</destination_name>");
   });
 
   it("accepts an XML booking body", async () => {

@@ -1068,6 +1068,18 @@ components:
           description: The cost of the trip
           examples:
             - 50
+        currency:
+          type: string
+          description: Three-letter [ISO currency code](https://www.iso.org/iso-4217-currency-codes.html) of the price, in lowercase. It is the currency of the origin station's country.
+          enum:
+            - bam
+            - bgn
+            - chf
+            - eur
+            - gbp
+            - nok
+            - sek
+            - try
         bicycles_allowed:
           type: boolean
           description: Indicates whether bicycles are allowed on the trip
@@ -1639,6 +1651,7 @@ components:
             departure_time: '2024-02-01T10:00:00Z'
             arrival_time: '2024-02-01T16:00:00Z'
             price: 50
+            currency: eur
             operator: Deutsche Bahn
             bicycles_allowed: true
             dogs_allowed: true
@@ -1654,6 +1667,7 @@ components:
             departure_time: '2024-02-01T12:00:00Z'
             arrival_time: '2024-02-01T18:00:00Z'
             price: 50
+            currency: eur
             operator: SNCF
             bicycles_allowed: true
             dogs_allowed: true

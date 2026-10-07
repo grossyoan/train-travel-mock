@@ -44,6 +44,7 @@ export interface Trip {
   arrival_time: string;
   operator: string;
   price: number;
+  currency: string;
   bicycles_allowed: boolean;
   dogs_allowed: boolean;
   links: { self: string; origin: string; destination: string };

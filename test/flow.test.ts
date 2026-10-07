@@ -56,6 +56,7 @@ describe("booking flow", () => {
       expect(trip.destination).toBe(PARIS);
       expect(trip.origin_name).toBe("Berlin Hauptbahnhof");
       expect(trip.destination_name).toBe("Paris Gare du Nord");
+      expect(trip.currency).toBe("eur");
       expect(Date.parse(trip.departure_time)).toBeGreaterThanOrEqual(Date.parse(`${FUTURE_DAY}T08:00:00Z`));
       expect(trip.departure_time).toMatch(UTC_DATE_TIME);
       expect(trip.arrival_time).toMatch(UTC_DATE_TIME);
@@ -77,7 +78,7 @@ describe("booking flow", () => {
       has_bicycle: false,
       has_dog: false,
     });
-    expect(booking).toMatchObject({ status: "pending_payment", price: trip.price, currency: "eur" });
+    expect(booking).toMatchObject({ status: "pending_payment", price: trip.price, currency: trip.currency });
     expect(Date.parse(booking.expires_at) - Date.now()).toBeGreaterThan(55 * 60 * 1000);
     expect(booking).not.toHaveProperty("ticket");
     expect(booking.links).toEqual({ self: `${BASE}/bookings/${booking.id}` });
@@ -156,6 +157,16 @@ describe("booking flow", () => {
       origin_name: "Berlin Hauptbahnhof",
       destination_name: "Paris Gare du Nord",
     });
+  });
+
+  it("prices a trip in the currency of its origin country, and books it in that currency", async () => {
+    const token = freshToken();
+    const trips = await searchTrips(token, `origin=London&destination=Paris&date=${FUTURE_DAY}`);
+    for (const trip of trips.data) expect(trip.currency).toBe("gbp");
+    const trip = trips.data[0] as Trip;
+    expect(await json<Trip>(await call("GET", `/trips/${trip.id}`, { token }))).toMatchObject({ currency: "gbp" });
+    const booking = await json<Booking>(await book(token, { trip_id: trip.id, passenger_name: "Ada" }));
+    expect(booking.currency).toBe("gbp");
   });
 
   it("expresses times in UTC, as the spec's examples do", async () => {

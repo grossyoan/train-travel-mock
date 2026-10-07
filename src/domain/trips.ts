@@ -1,6 +1,7 @@
+import { type Currency, currencyForCountry } from "./payments";
 import { type Random, seededRandom } from "./random";
 import type { StationRecord } from "./station-data";
-import { distanceKm } from "./stations";
+import { distanceKm, findStation } from "./stations";
 import { addDays, atLocalTime, formatUtc, localDay } from "./time";
 import { uuidV5 } from "./uuid";
 
@@ -42,6 +43,13 @@ const NATIONAL_OPERATORS: Record<string, string> = {
   SE: "SJ",
 };
 const FALLBACK_OPERATORS = ["EuroCity", "Nightjet", "European Sleeper"] as const;
+
+/** A trip is priced in the currency of its origin country; its booking is charged in it too. */
+export function tripCurrency(trip: Pick<Trip, "origin">): Currency {
+  const station = findStation(trip.origin);
+  if (!station) throw new Error(`Unknown station ${trip.origin}`);
+  return currencyForCountry(station.country_code);
+}
 
 /** Rail lines are longer than the great circle. */
 const RAIL_DETOUR = 1.25;

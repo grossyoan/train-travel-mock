@@ -7,9 +7,9 @@ import {
   holdUntil,
   presentBooking,
 } from "../domain/bookings";
-import { currencyForCountry, settle, validatePayment } from "../domain/payments";
-import { findStation } from "../domain/stations";
+import { settle, validatePayment } from "../domain/payments";
 import { formatUtc } from "../domain/time";
+import { tripCurrency } from "../domain/trips";
 import { summarize, validateFields } from "../domain/validation";
 import type { AppEnv } from "../http/app-env";
 import { baseUrl } from "../http/links";
@@ -113,7 +113,7 @@ bookings.post("/bookings", operation("create-booking"), async (c) => {
     origin: trip.origin,
     destination: trip.destination,
     price: trip.price,
-    currency: currencyForCountry(findStation(trip.origin)?.country_code),
+    currency: tripCurrency(trip),
     expires_at: holdUntil(now),
     departure_time: trip.departure_time,
   };

@@ -1,7 +1,7 @@
 import { type Context, Hono } from "hono";
 import { resolveStation, stationName } from "../domain/stations";
 import { parseDateInZone } from "../domain/time";
-import { searchTrips, type Trip } from "../domain/trips";
+import { searchTrips, type Trip, tripCurrency } from "../domain/trips";
 import { tripUpdates } from "../domain/updates";
 import { type FieldError, summarize, validateFields } from "../domain/validation";
 import type { AppEnv } from "../http/app-env";
@@ -19,19 +19,24 @@ const DEFAULT_INTERVAL_SECONDS = 2;
 const MAX_INTERVAL_SECONDS = 10;
 
 /**
- * Station names are derived here rather than stored, so trips saved before names existed
- * still get them. Keys follow the spec's order.
+ * Station names and currency are derived here rather than stored, so trips saved before
+ * they existed still get them. Keys follow the spec's order.
  */
 function withLinks(c: Context<AppEnv>, trip: Trip) {
   const base = baseUrl(c);
-  const { id, origin, destination, ...rest } = trip;
   return {
-    id,
-    origin,
-    destination,
-    origin_name: stationName(origin),
-    destination_name: stationName(destination),
-    ...rest,
+    id: trip.id,
+    origin: trip.origin,
+    destination: trip.destination,
+    origin_name: stationName(trip.origin),
+    destination_name: stationName(trip.destination),
+    departure_time: trip.departure_time,
+    arrival_time: trip.arrival_time,
+    operator: trip.operator,
+    price: trip.price,
+    currency: tripCurrency(trip),
+    bicycles_allowed: trip.bicycles_allowed,
+    dogs_allowed: trip.dogs_allowed,
     links: {
       self: `${base}/trips/${trip.id}`,
       origin: `${base}/stations/${trip.origin}`,
